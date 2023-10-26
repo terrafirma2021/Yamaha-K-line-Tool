@@ -23,3 +23,6 @@ I Have included a Data Log with some explanations of the different blocks
 My ECU Dump
 
 ECU Pinouts
+
+Helpfull site:
+https://www.iwasz.pl/electronics/motorcycle-black-box-part-1-data-acquisition-with-arduino-mega/
