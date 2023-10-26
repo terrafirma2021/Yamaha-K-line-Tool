@@ -18,4 +18,6 @@ To get started with this project, follow these steps:
 
 ## Note
 
-i Have included a Data Log with some explanations of the different blocks
+I Have included a Data Log with some explanations of the different blocks
+My ECU Dump
+ECU Pinouts
