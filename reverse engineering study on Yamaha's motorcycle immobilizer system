@@ -1,0 +1,35 @@
+Yamaha Immobilizer Reverse Engineering
+Introduction
+
+This repository contains a detailed reverse engineering study on Yamaha's motorcycle immobilizer system. The system consists of 3 main components: 4D60 Transponder, Immobox, and ECU Motor Controller. The communication relies on UART in half-duplex mode over a K-line.
+Communication Specifications
+
+    Baud Rate: 15625 bits/s
+    Parity Bit: None
+    Stop Bit: 1
+
+Algorithm
+Puzzle Generation
+
+    Sent by Immobox with opcode 0x3E.
+    ECU responds with a 3-byte puzzle.
+
+Hash Generation
+
+    Sent by Immobox with opcode 0x3D.
+    ECU responds with a 24-bit Hash generated from a 32-bit Master key.
+
+Puzzle Solution Algorithm
+
+python
+
+# Input and output bit numbers
+B1i, B2i, B3i = 0, 0, 0  # Replace with actual values
+
+B1o = int(((B1i * B2i) + (B1i * B3i) + (B2i * B3i)) / 0x1000) + 0x80
+B2o = int(((B1i * B2i) + (B1i * B3i) + (B2i * B3i)) / 0x40) % 0x40 + 0x80
+B3o = ((B1i * B2i) + (B1i * B3i) + (B2i * B3i)) % 0x40 + 0x80
+
+Loopholes and Optimizations
+
+Due to the Hashing and Anti-Hashing algorithm, it is possible to reduce the key search space dramatically from 2^32 to 2^14. This allows generating a master key for a used ECU non-invasively, greatly speeding up the process and eliminating the need for physical interference.
