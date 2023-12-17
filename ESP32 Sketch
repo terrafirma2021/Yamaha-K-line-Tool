@@ -1,164 +1,296 @@
-//Yamaha K-Line Tool Base 
-
 #include <Arduino.h>
- 
+
 #define DASH_RX 1
 #define DASH_TX 38
 #define ECU_RX 11
 #define ECU_TX 10
- 
+
 byte Dash_RX_TO_ECU_TX[6];
 byte ECU_RX_TO_Dash_TX[6];
 byte IMMO_Buffer[54];
- 
+
 byte ecuBufferIndex = 0;
 byte dashBufferIndex = 0;
 byte IMMOIndex = 0;
- 
+
+byte Diag_Menu_Buff;
+byte Diag_Data_Buff;
+
+byte RemoteControl[2] = { 0x00, 0x00 };  // Initialize with default values
+
 bool dashInitiatedComm = false;
 bool isIMMOSeq = false;
- 
+
+
+
 void setup() {
-    Serial.begin(115200);
-    Serial1.begin(16040, SERIAL_8N1, DASH_RX, DASH_TX);
-    Serial2.begin(16040, SERIAL_8N1, ECU_RX, ECU_TX);
-    pinMode(7, OUTPUT);
-    digitalWrite(7, HIGH);
+  Serial.begin(115200);
+  Serial1.begin(16040, SERIAL_8N1, DASH_RX, DASH_TX);
+  Serial2.begin(16040, SERIAL_8N1, ECU_RX, ECU_TX);
+  pinMode(7, OUTPUT);
+  digitalWrite(7, HIGH);
 }
- 
+
 void resetBuffersAndFlags() {
-    memset(Dash_RX_TO_ECU_TX, 0, sizeof(Dash_RX_TO_ECU_TX));
-    memset(ECU_RX_TO_Dash_TX, 0, sizeof(ECU_RX_TO_Dash_TX));
-    dashBufferIndex = 0;
-    ecuBufferIndex = 0;
-    dashInitiatedComm = false;
-    isIMMOSeq = false;
+  memset(Dash_RX_TO_ECU_TX, 0, sizeof(Dash_RX_TO_ECU_TX));
+  memset(ECU_RX_TO_Dash_TX, 0, sizeof(ECU_RX_TO_Dash_TX));
+  dashBufferIndex = 0;
+  ecuBufferIndex = 0;
+  dashInitiatedComm = false;
+  isIMMOSeq = false;
 }
- 
+
 void handleDashToECU() {
-    if (Serial1.available()) {
-        byte incomingByte = Serial1.read();
- 
-        if (incomingByte == 0xFE) {
-            Serial.println("Bike Reset");
-            Serial2.write(incomingByte);
-            resetBuffersAndFlags();
-            dashInitiatedComm = true;
-            return;
-        }
- 
-        Dash_RX_TO_ECU_TX[dashBufferIndex++] = incomingByte;
-        if (dashBufferIndex == 6) {
-            Serial2.write(Dash_RX_TO_ECU_TX[5]);
-            dashBufferIndex = 0;
-        }
+  if (Serial1.available()) {
+    byte incomingByte = Serial1.read();
+
+    if (incomingByte == 0xFE) {
+      Serial.println("Bike Reset");
+      Serial2.write(incomingByte);
+      resetBuffersAndFlags();
+      dashInitiatedComm = true;
+      return;
     }
+
+    Dash_RX_TO_ECU_TX[dashBufferIndex++] = incomingByte;
+    if (dashBufferIndex == 6) {
+      Serial2.write(Dash_RX_TO_ECU_TX[5]);
+      dashBufferIndex = 0;
+    }
+  }
 }
- 
+
 void handleECUToDash() {
-    if (Serial2.available()) {
-        byte incomingByte = Serial2.read();
- 
-        if (!isIMMOSeq && incomingByte == 0x3E) {
-            Serial.println("IMMO Received.");
-            isIMMOSeq = true;
-        }
- 
-        if (isIMMOSeq) {
-            IMMO_Buffer[IMMOIndex++] = incomingByte;
-            if (IMMOIndex >= 54) {
-                isIMMOSeq = false;
-                IMMOIndex = 0;
-            }
-        } else if (dashInitiatedComm) {
-            ECU_RX_TO_Dash_TX[ecuBufferIndex++] = incomingByte;
-            if (ecuBufferIndex == 6) {
-                Serial1.write(ECU_RX_TO_Dash_TX + 1, 5);
-                ecuBufferIndex = 0;
-            }
-        }
+  if (Serial2.available()) {
+    byte incomingByte = Serial2.read();
+
+    // Check for IMMO sequence
+    if (!isIMMOSeq && incomingByte == 0x3E) {
+      Serial.println("IMMO Received.");
+      isIMMOSeq = true;
     }
+
+    // Handle IMMO sequence
+    if (isIMMOSeq) {
+      IMMO_Buffer[IMMOIndex++] = incomingByte;
+      if (IMMOIndex >= 54) {
+        isIMMOSeq = false;
+        IMMOIndex = 0;
+      }
+
+    } else if (dashInitiatedComm) {
+      // Populate the ECU to Dash buffer
+      ECU_RX_TO_Dash_TX[ecuBufferIndex++] = incomingByte;
+
+      if (ecuBufferIndex == 6) {
+        // Send data from ECU_RX_TO_Dash_TX (excluding the first byte) to Serial1
+        Serial1.write(ECU_RX_TO_Dash_TX + 1, 5);
+
+        // Check conditions for Diag_Menu_Buff and Diag_Data_Buff
+        if (ECU_RX_TO_Dash_TX[3] == 0x40) {
+          Diag_Menu_Buff = ECU_RX_TO_Dash_TX[4];
+        } else if (ECU_RX_TO_Dash_TX[3] == 0x00) {
+          Diag_Data_Buff = ECU_RX_TO_Dash_TX[4];
+        }
+        //Fix Buffer spamming the serial monitor when bike is turned off
+        // Reset both Diag_Menu_Buff and Diag_Data_Buff only if both buffers contain bytes
+        //  if (ECU_RX_TO_Dash_TX[3] == 0x40 && ECU_RX_TO_Dash_TX[3] == 0x00) {
+        //   Diag_Menu_Buff = 0;
+        //    Diag_Data_Buff = 0;
+        //  }
+
+        ecuBufferIndex = 0;
+      }
+    }
+  }
 }
- 
+// Fix Timings
+void handleRemoteControl() {
+  static String input = "";  // Static variable to store incoming characters
+  while (Serial.available() > 0) {
+    char incomingChar = (char)Serial.read();
+    // Check for newline character
+    if (incomingChar == '\n') {
+      // Process the complete command
+      if (input == "down") {
+        RemoteControl[0] = 0xCC;
+        RemoteControl[1] = 0xCA;
+        Serial.println("Down");  // Confirm the command
+      } else if (input == "up") {
+        RemoteControl[0] = 0xCB;
+        RemoteControl[1] = 0xCA;
+        Serial.println("Up");  // Confirm the command
+      } else if (input == "enter") {
+        RemoteControl[0] = 0xCD;
+        RemoteControl[1] = 0xCA;
+        Serial.println("Enter");  // Confirm the command
+      }
+
+      // Send the bytes directly to Serial2 without going into the buffer
+      Serial2.write(RemoteControl, sizeof(RemoteControl));
+
+      // Trigger the resetBuffersAndFlags() function
+      resetBuffersAndFlags();
+
+      // Clear the input string for the next command
+      input = "";
+    } else {
+      // Append the incoming character to the input string
+      input += incomingChar;
+    }
+  }
+}
+
+
+
 void DiagMenu() {
-    if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-        ECU_RX_TO_Dash_TX[4] == 0xD0 && ECU_RX_TO_Dash_TX[5] == 0x10)
-        Serial.println("Diag:");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0xC0 && ECU_RX_TO_Dash_TX[5] == 0x00)
-        Serial.println("C0 Sub Menu:");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0xC1 && ECU_RX_TO_Dash_TX[5] == 0x01)
-        Serial.println("C1 Sub Menu:");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x00 && 
-             ECU_RX_TO_Dash_TX[4] == 0x8F && ECU_RX_TO_Dash_TX[5] == 0x8F)
-        Serial.println("C0 Adjust: 15");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0x01 && ECU_RX_TO_Dash_TX[5] == 0x41)
-        Serial.println("D01: TPS%");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0x03 && ECU_RX_TO_Dash_TX[5] == 0x43)
-        Serial.println("D03: MAP");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0x05 && ECU_RX_TO_Dash_TX[5] == 0x45)
-        Serial.println("D05: Airbox Sensor");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0x06 && ECU_RX_TO_Dash_TX[5] == 0x46)
-        Serial.println("D06: Coolant Sensor");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0x07 && ECU_RX_TO_Dash_TX[5] == 0x47)
-        Serial.println("D07: Wheel Speed Sensor");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0x08 && ECU_RX_TO_Dash_TX[5] == 0x48)
-        Serial.println("D08: Lean Angle Sensor");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0x09 && ECU_RX_TO_Dash_TX[5] == 0x49)
-        Serial.println("D09: Battery Voltage");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0x14 && ECU_RX_TO_Dash_TX[5] == 0x54)
-        Serial.println("D20: Side Stand");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0x15 && ECU_RX_TO_Dash_TX[5] == 0x55)
-        Serial.println("D21: Neutral Switch");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0x1E && ECU_RX_TO_Dash_TX[5] == 0x5E)
-        Serial.println("D30: Coil Spark");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0x24 && ECU_RX_TO_Dash_TX[5] == 0x64)
-        Serial.println("D36: Inj Pulse");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0x30 && ECU_RX_TO_Dash_TX[5] == 0x70)
-        Serial.println("D48: AIS Solenoid");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0x32 && ECU_RX_TO_Dash_TX[5] == 0x72)
-        Serial.println("D50: FI Relay");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0x33 && ECU_RX_TO_Dash_TX[5] == 0x73)
-        Serial.println("D51: Fan Relay");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0x34 && ECU_RX_TO_Dash_TX[5] == 0x74)
-        Serial.println("D52: Headlight Relay");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0x3C && ECU_RX_TO_Dash_TX[5] == 0x7C)
-        Serial.println("D60: EFI Light");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0x3D && ECU_RX_TO_Dash_TX[5] == 0x7D)
-        Serial.println("D61: Display Error Codes");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0x3E && ECU_RX_TO_Dash_TX[5] == 0x7E)
-        Serial.println("D62: Stored Error Codes (6)");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0x3F && ECU_RX_TO_Dash_TX[5] == 0x7F)
-        Serial.println("D63: Wipe Error Codes");
-    else if (ECU_RX_TO_Dash_TX[1] == 0x00 && ECU_RX_TO_Dash_TX[2] == 0x00 && ECU_RX_TO_Dash_TX[3] == 0x40 && 
-             ECU_RX_TO_Dash_TX[4] == 0x46 && ECU_RX_TO_Dash_TX[5] == 0x86)
-        Serial.println("D70: Idle Shut Down");
+  // Declare variables outside of the switch statement
+  int tpsValueInt = 0;
+  double tpsValue = 0.0;
+  String tpsValueStr;
+  String sidestand = (Diag_Data_Buff == 0x00) ? "On" : "Off";
+  String neutralSwitch = (Diag_Data_Buff == 0x00) ? "On" : "Off";
+
+
+  switch (Diag_Menu_Buff) {
+    // Diag Menu
+    case 0xD0:
+      Serial.println("Diag:");
+      break;
+
+    // C0 Sub Menu
+    case 0xC0:
+      Serial.println("C0 Sub Menu:");
+      break;
+
+    // C1 Sub Menu
+    case 0xC1:
+      Serial.println("C1 Sub Menu:");
+      break;
+
+    // C0 Adjust
+    case 0x8F:
+      Serial.println("C0 Adjust: 15");
+      break;
+
+    //D01 TPS%
+    case 0x01:
+      tpsValue = (Diag_Data_Buff - 1) * 0.5;
+
+      // Convert the double to an integer (whole number)
+      tpsValueInt = static_cast<int>(tpsValue);
+
+      Serial.print("D01 TPS: ");
+      Serial.println(tpsValueInt);
+      break;
+
+    // D03: MAP
+    case 0x03:
+      Serial.println("D03: MAP");
+      break;
+
+    // D05: Airbox Sensor
+    case 0x05:
+      Serial.println("D05: Airbox Sensor");
+      break;
+
+    // D06: Coolant Sensor
+    case 0x06:
+      Serial.println("D06: Coolant Sensor");
+      break;
+
+    // D07: Wheel Speed Sensor
+    case 0x07:
+      Serial.println("D07: Wheel Speed Sensor");
+      break;
+
+    // D08: Lean Angle Sensor
+    case 0x08:
+      Serial.println("D08: Lean Angle Sensor");
+      break;
+
+    // D09: Battery Voltage
+    case 0x09:
+      Serial.println("D09: Battery Voltage");
+      break;
+
+    // D20: Side Stand
+    case 0x14:
+      // Print the value of sidestand
+      Serial.print("D20 Side Stand: ");
+      Serial.println(sidestand);
+      break;
+
+    // D21: Neutral Switch
+    case 0x15:
+      // Print the value of neutralSwitch
+      Serial.print("D21 Neutral Switch: ");
+      Serial.println(neutralSwitch);
+      break;
+
+    // D30: Coil Spark
+    case 0x1E:
+      Serial.println("D30: Coil Spark");
+      break;
+
+    // D36: Inj Pulse
+    case 0x24:
+      Serial.println("D36: Inj Pulse");
+      break;
+
+    // D48: AIS Solenoid
+    case 0x30:
+      Serial.println("D48: AIS Solenoid");
+      break;
+
+    // D50: FI Relay
+    case 0x32:
+      Serial.println("D50: FI Relay");
+      break;
+
+    // D51: Fan Relay
+    case 0x33:
+      Serial.println("D51: Fan Relay");
+      break;
+
+    // D52: Headlight Relay
+    case 0x34:
+      Serial.println("D52: Headlight Relay");
+      break;
+
+    // D60: EFI Light
+    case 0x3C:
+      Serial.println("D60: EFI Light");
+      break;
+
+    // D61: Display Error Codes
+    case 0x3D:
+      Serial.println("D61: Display Error Codes");
+      break;
+
+    // D62: Stored Error Codes (6)
+    case 0x3E:
+      Serial.println("D62: Stored Error Codes (6)");
+      break;
+
+    // D63: Wipe Error Codes
+    case 0x3F:
+      Serial.println("D63: Wipe Error Codes");
+      break;
+
+    // D:70 Idle shut down
+    case 0x70:
+      Serial.println("D:70 Idle shut down");
+      break;
+  }
 }
- 
+
+
+
+
 void loop() {
-    handleDashToECU();
-    handleECUToDash();
-    DiagMenu();
-
-    }
-
+  handleDashToECU();
+  handleECUToDash();
+  handleRemoteControl();
+  DiagMenu();
+}
