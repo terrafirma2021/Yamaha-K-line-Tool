@@ -97,7 +97,7 @@ Unknown Block
 Engine Running
 1st Byte is Request 0x01
 2nd byte is RPM (value * 50)
-3rd Byte is Velocity
+3rd Byte is Velocity (8 bytes summed = KM/h) 
 4th Byte is Error code 
 5th Byte is Coolent Temp
 6th Byte is Checksum
